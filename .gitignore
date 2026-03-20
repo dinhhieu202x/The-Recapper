@@ -6,10 +6,6 @@ __pycache__/
 .venv/
 venv/
 
-# Loại bỏ các file test và rác
-check_models.py
-*.jpg
-*.png
-*.log
-.vscode/
-.idea/
+# Loại bỏ các file Docker
+Dockerfile
+.dockerignore
