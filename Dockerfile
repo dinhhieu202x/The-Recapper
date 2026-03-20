@@ -18,4 +18,5 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
 # Lệnh khởi chạy bot
+EXPOSE 8080
 CMD ["python", "bot.py"]

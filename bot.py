@@ -3,17 +3,28 @@ Entry point của Discord Recap Bot.
 Chạy: python bot.py
 """
 
-import asyncio
-import logging
-import os
-import sys
-
 import discord
 from discord.ext import commands
 from dotenv import load_dotenv
+from flask import Flask
+from threading import Thread
 
 # Load biến môi trường từ .env
 load_dotenv()
+
+# ─── Flask Web Server (Dành cho Render) ──────────────────────────────────────────
+app = Flask("")
+
+@app.route("/")
+def home():
+    return "I am alive!"
+
+def run_web():
+    app.run(host="0.0.0.0", port=8080)
+
+def keep_alive():
+    t = Thread(target=run_web)
+    t.start()
 
 # ─── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -78,8 +89,14 @@ class RecapBot(commands.Bot):
         logger.error(f"Lỗi command: {error}")
 
 
+import asyncio
+import logging
+import os
+import sys
+
 # ─── Main ──────────────────────────────────────────────────────────────────────
 async def main():
+    keep_alive()  # Khởi động web server cho Render
     bot = RecapBot()
     async with bot:
         await bot.start(TOKEN)
