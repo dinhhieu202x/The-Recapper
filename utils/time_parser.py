@@ -110,12 +110,14 @@ def build_datetime_range(
     else:
         start_time = time(0, 0)
 
-    # Xử lý giờ kết thúc (Mặc định 23:59)
+    # Xử lý giờ kết thúc (Mặc định: Bây giờ nếu không nhập)
     if end_str:
         end_time = parse_time_string(end_str)
         if end_time is None: return None, None
     else:
-        end_time = time(23, 59, 59)
+        # Lấy giờ hiện tại của hệ thống (local)
+        now_local_time = datetime.now(TIMEZONE).time()
+        end_time = now_local_time
 
     base_date = parse_date_string(date_str)
 

@@ -28,6 +28,7 @@ class RecapCog(commands.Cog):
         end="Giờ kết thúc (Mặc định: 23:59). VD: 12h30",
         user="Chỉ recap tin nhắn của user này (để trống = tất cả)",
         date="Ngày cần recap (Mặc định: hôm nay). VD: yesterday, 2024-03-20",
+        target_channel="Kênh muốn recap (Để trống = kênh hiện tại)",
     )
     async def recap(
         self,
@@ -36,12 +37,14 @@ class RecapCog(commands.Cog):
         end: Optional[str] = None,
         user: Optional[discord.Member] = None,
         date: Optional[str] = None,
+        target_channel: Optional[discord.TextChannel] = None,
     ):
         # Defer ngay để tránh timeout (việc fetch + AI có thể mất vài giây)
         # Dùng ephemeral=False vì kết quả sẽ post công khai lên kênh
         await interaction.response.defer(ephemeral=False, thinking=True)
 
-        channel = interaction.channel
+        # Ưu tiên kênh được chọn, nếu không thì lấy kênh hiện tại
+        channel = target_channel or interaction.channel
 
         # --- Kiểm tra channel hợp lệ ---
         if not isinstance(channel, discord.TextChannel):
@@ -68,7 +71,7 @@ class RecapCog(commands.Cog):
             return
 
         logger.info(
-            f"[RECAP] #{channel.name} | {format_local_time(start_utc)} → "
+            f"[RECAP] #{channel.name} (Source) | {format_local_time(start_utc)} → "
             f"{format_local_time(end_utc)} | user={user}"
         )
 
@@ -82,11 +85,13 @@ class RecapCog(commands.Cog):
     )
     @app_commands.describe(
         user="Chỉ recap tin nhắn của user này (để trống = tất cả)",
+        target_channel="Kênh muốn recap (Để trống = kênh hiện tại)",
     )
     async def recap_today(
         self,
         interaction: discord.Interaction,
         user: Optional[discord.Member] = None,
+        target_channel: Optional[discord.TextChannel] = None,
     ):
         await interaction.response.defer(ephemeral=False, thinking=True)
 
@@ -106,7 +111,8 @@ class RecapCog(commands.Cog):
         start_utc = start_local.astimezone(pytz.utc)
         end_utc = end_local.astimezone(pytz.utc)
 
-        channel = interaction.channel
+        # Ưu tiên kênh được chọn
+        channel = target_channel or interaction.channel
         if not isinstance(channel, discord.TextChannel):
             await interaction.followup.send(embed=build_error_embed("Lỗi", "Chỉ dùng lệnh này được trong kênh chat văn bản."))
             return
@@ -158,9 +164,18 @@ class RecapCog(commands.Cog):
             for extra_embed in embeds[1:]:
                 await channel.send(embed=extra_embed)
 
+        except discord.Forbidden:
+            logger.error(f"[RECAP] Thiếu quyền truy cập trong #{channel.name}")
+            await interaction.followup.send(
+                embed=build_error_embed(
+                    "Thiếu quyền truy cập",
+                    f"Bot không có quyền xem hoặc đọc lịch sử tin nhắn trong kênh {channel.mention}.\n"
+                    "Vui lòng kiểm tra lại quyền **View Channel** và **Read Message History**."
+                )
+            )
         except Exception as e:
             logger.error(f"[RECAP] Lỗi hệ thống: {e}")
-            await interaction.followup.send(embed=build_error_embed("Lỗi hệ thống", str(e)))
+            await interaction.followup.send(embed=build_error_embed("Lỗi hệ thống", f"Đã xảy ra lỗi: `{str(e)}`"))
 
 
 async def setup(bot: commands.Bot):
