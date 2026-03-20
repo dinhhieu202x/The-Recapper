@@ -3,6 +3,10 @@ Entry point của Discord Recap Bot.
 Chạy: python bot.py
 """
 
+import asyncio
+import logging
+import os
+import sys
 import discord
 from discord.ext import commands
 from dotenv import load_dotenv
@@ -88,11 +92,6 @@ class RecapBot(commands.Bot):
     async def on_command_error(self, ctx, error):
         logger.error(f"Lỗi command: {error}")
 
-
-import asyncio
-import logging
-import os
-import sys
 
 # ─── Main ──────────────────────────────────────────────────────────────────────
 async def main():
