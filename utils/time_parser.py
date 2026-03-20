@@ -48,10 +48,12 @@ def parse_time_string(time_str: str) -> time | None:
         if 0 <= hour <= 23 and 0 <= minute <= 59:
             return time(hour, minute)
 
-    # Pattern: chỉ giờ nguyên (10 → 10:00)
+    # Pattern: chỉ giờ nguyên (10 → 10:00, 24 → 23:59:59)
     m = re.match(r"^(\d{1,2})$", time_str)
     if m:
         hour = int(m.group(1))
+        if hour == 24:
+            return time(23, 59, 59)
         if 0 <= hour <= 23:
             return time(hour, 0)
 
@@ -93,19 +95,27 @@ def parse_date_string(date_str: str | None) -> datetime:
 
 
 def build_datetime_range(
-    start_str: str,
-    end_str: str,
+    start_str: str | None,
+    end_str: str | None,
     date_str: str | None = None,
 ) -> tuple[datetime, datetime] | tuple[None, None]:
     """
     Kết hợp ngày + giờ bắt đầu/kết thúc thành 2 datetime UTC.
-    Trả về (start_utc, end_utc) hoặc (None, None) nếu parse lỗi.
+    Nếu start_str/end_str là None, mặc định là 00:00 -> 23:59.
     """
-    start_time = parse_time_string(start_str)
-    end_time = parse_time_string(end_str)
+    # Xử lý giờ bắt đầu (Mặc định 00:00)
+    if start_str:
+        start_time = parse_time_string(start_str)
+        if start_time is None: return None, None
+    else:
+        start_time = time(0, 0)
 
-    if start_time is None or end_time is None:
-        return None, None
+    # Xử lý giờ kết thúc (Mặc định 23:59)
+    if end_str:
+        end_time = parse_time_string(end_str)
+        if end_time is None: return None, None
+    else:
+        end_time = time(23, 59, 59)
 
     base_date = parse_date_string(date_str)
 
@@ -113,14 +123,21 @@ def build_datetime_range(
         hour=start_time.hour, minute=start_time.minute, second=0, microsecond=0
     )
     end_local = base_date.replace(
-        hour=end_time.hour, minute=end_time.minute, second=0, microsecond=0
+        hour=end_time.hour, minute=end_time.minute, second=end_time.second, microsecond=0
     )
 
-    # Nếu end < start → end thuộc ngày hôm sau (VD: 23h → 01h)
+    # Nếu người dùng nhập end < start (VD: 23h -> 01h sáng hôm sau)
     if end_local <= start_local:
         end_local += timedelta(days=1)
 
-    # Convert sang UTC để so sánh với Discord timestamp
+    # Giới hạn thời gian kết thúc không vượt quá "Bây giờ" nếu là ngày hôm nay
+    now_local = datetime.now(TIMEZONE)
+    if end_local > now_local:
+        # Chỉ giới hạn nếu start_local vẫn ở quá khứ
+        if start_local < now_local:
+            end_local = now_local
+
+    # Convert sang UTC
     start_utc = start_local.astimezone(pytz.utc)
     end_utc = end_local.astimezone(pytz.utc)
 

@@ -5,3 +5,11 @@ __pycache__/
 *.pyo
 .venv/
 venv/
+
+# Loại bỏ các file test và rác
+check_models.py
+*.jpg
+*.png
+*.log
+.vscode/
+.idea/

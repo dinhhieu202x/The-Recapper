@@ -24,16 +24,16 @@ class RecapCog(commands.Cog):
         description="📋 Tóm tắt nội dung chat trong kênh theo khung giờ",
     )
     @app_commands.describe(
-        start="Thời gian bắt đầu (VD: 10h30, 10:30, 10h)",
-        end="Thời gian kết thúc (VD: 12h30, 12:30, 12h)",
+        start="Giờ bắt đầu (Mặc định: 00:00). VD: 10h30",
+        end="Giờ kết thúc (Mặc định: 23:59). VD: 12h30",
         user="Chỉ recap tin nhắn của user này (để trống = tất cả)",
-        date="Ngày cần recap (VD: today, yesterday, 2024-03-20). Mặc định: hôm nay",
+        date="Ngày cần recap (Mặc định: hôm nay). VD: yesterday, 2024-03-20",
     )
     async def recap(
         self,
         interaction: discord.Interaction,
-        start: str,
-        end: str,
+        start: Optional[str] = None,
+        end: Optional[str] = None,
         user: Optional[discord.Member] = None,
         date: Optional[str] = None,
     ):
@@ -72,7 +72,57 @@ class RecapCog(commands.Cog):
             f"{format_local_time(end_utc)} | user={user}"
         )
 
-        # --- Fetch messages ---
+        # Gọi logic xử lý tin nhắn và AI
+        await self._do_recap_process(interaction, channel, start_utc, end_utc, user)
+
+
+    @app_commands.command(
+        name="recap_today",
+        description="📅 Tóm tắt nhanh toàn bộ chat từ 00:00 hôm nay đến bây giờ",
+    )
+    @app_commands.describe(
+        user="Chỉ recap tin nhắn của user này (để trống = tất cả)",
+    )
+    async def recap_today(
+        self,
+        interaction: discord.Interaction,
+        user: Optional[discord.Member] = None,
+    ):
+        await interaction.response.defer(ephemeral=False, thinking=True)
+
+        from datetime import datetime, time
+        import pytz
+        
+        # Thiết lập múi giờ
+        tz = pytz.timezone("Asia/Ho_Chi_Minh")
+        now_local = datetime.now(tz)
+        
+        # Bắt đầu từ 00:00 hôm nay (theo giờ local)
+        start_local = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+        # Kết thúc tại thời điểm hiện tại
+        end_local = now_local
+        
+        # Chuyển sang UTC để gọi API Discord
+        start_utc = start_local.astimezone(pytz.utc)
+        end_utc = end_local.astimezone(pytz.utc)
+
+        channel = interaction.channel
+        if not isinstance(channel, discord.TextChannel):
+            await interaction.followup.send(embed=build_error_embed("Lỗi", "Chỉ dùng lệnh này được trong kênh chat văn bản."))
+            return
+
+        # Gọi logic fetch và recap (tận dụng code đã có)
+        await self._do_recap_process(interaction, channel, start_utc, end_utc, user)
+
+    async def _do_recap_process(
+        self, 
+        interaction: discord.Interaction, 
+        channel: discord.TextChannel, 
+        start_utc: datetime, 
+        end_utc: datetime, 
+        user: Optional[discord.Member]
+    ):
+        """Hàm helper chứa logic chính của việc recap để dùng chung cho nhiều lệnh."""
         try:
             messages = await fetch_messages_in_range(
                 channel=channel,
@@ -81,60 +131,36 @@ class RecapCog(commands.Cog):
                 target_user=user,
                 max_messages=MAX_MESSAGES,
             )
-        except discord.Forbidden:
-            await interaction.followup.send(
-                embed=build_error_embed(
-                    "Thiếu quyền",
-                    "Bot không có quyền đọc lịch sử tin nhắn trong kênh này.\n"
-                    "Vui lòng cấp quyền **Read Message History** cho bot.",
+            
+            if not messages:
+                user_text = f" của **{user.display_name}**" if user else ""
+                await interaction.followup.send(
+                    embed=build_warning_embed(
+                        "Không có tin nhắn",
+                        f"Không tìm thấy tin nhắn{user_text} nào từ đầu ngày đến giờ."
+                    )
                 )
+                return
+
+            conversation_text = format_messages_for_ai(messages)
+            summary = await summarize(conversation_text)
+
+            embeds = build_recap_embed(
+                summary=summary,
+                channel=channel,
+                start_utc=start_utc,
+                end_utc=end_utc,
+                message_count=len(messages),
+                target_user=user,
             )
-            return
+
+            await interaction.followup.send(embed=embeds[0])
+            for extra_embed in embeds[1:]:
+                await channel.send(embed=extra_embed)
+
         except Exception as e:
-            logger.error(f"[RECAP] Lỗi fetch messages: {e}")
-            await interaction.followup.send(
-                embed=build_error_embed(
-                    "Lỗi hệ thống",
-                    f"Không thể đọc tin nhắn: `{e}`",
-                )
-            )
-            return
-
-        # --- Không có tin nhắn ---
-        if not messages:
-            user_text = f" của **{user.display_name}**" if user else ""
-            await interaction.followup.send(
-                embed=build_warning_embed(
-                    "Không có tin nhắn",
-                    f"Không tìm thấy tin nhắn{user_text} trong khoảng:\n"
-                    f"🕐 `{format_local_time(start_utc)}` → `{format_local_time(end_utc)}`",
-                )
-            )
-            return
-
-        # --- Format và gửi AI ---
-        conversation_text = format_messages_for_ai(messages)
-        summary = await summarize(conversation_text)
-
-        # --- Tạo Embed và post lên kênh ---
-        embeds = build_recap_embed(
-            summary=summary,
-            channel=channel,
-            start_utc=start_utc,
-            end_utc=end_utc,
-            message_count=len(messages),
-            target_user=user,
-        )
-
-        # Gửi embed đầu tiên qua followup, các embed tiếp theo gửi trực tiếp vào kênh
-        await interaction.followup.send(embed=embeds[0])
-        for extra_embed in embeds[1:]:
-            await channel.send(embed=extra_embed)
-
-        logger.info(
-            f"[RECAP] Hoàn thành: {len(messages)} tin nhắn, "
-            f"{len(embeds)} embed(s) gửi lên #{channel.name}"
-        )
+            logger.error(f"[RECAP] Lỗi hệ thống: {e}")
+            await interaction.followup.send(embed=build_error_embed("Lỗi hệ thống", str(e)))
 
 
 async def setup(bot: commands.Bot):
