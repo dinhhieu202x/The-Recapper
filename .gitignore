@@ -9,3 +9,9 @@ venv/
 # Loại bỏ các file Docker
 Dockerfile
 .dockerignore
+
+# Loại bỏ các file ảnh và rác
+*.jpg
+*.png
+*.log
+check_models.py
