@@ -2,6 +2,8 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 from typing import Optional
+from datetime import datetime
+import pytz
 import logging
 
 from utils.time_parser import build_datetime_range, format_local_time
@@ -95,9 +97,6 @@ class RecapCog(commands.Cog):
     ):
         await interaction.response.defer(ephemeral=False, thinking=True)
 
-        from datetime import datetime, time
-        import pytz
-        
         # Thiết lập múi giờ
         tz = pytz.timezone("Asia/Ho_Chi_Minh")
         now_local = datetime.now(tz)
