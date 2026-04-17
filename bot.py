@@ -51,9 +51,12 @@ class RecapBot(commands.Bot):
         )
 
     async def setup_hook(self):
-        """Gọi khi bot khởi động — load các Cog và sync slash commands."""
-        logger.info("🔧 Đang load các Cog...")
+        """Gọi khi bot khởi động — khởi tạo DB, load các Cog và sync slash commands."""
+        # Khởi tạo SQLite database
+        from services.context_db import init_db
+        await init_db()
 
+        logger.info("🔧 Đang load các Cog...")
         await self.load_extension("cogs.recap")
         logger.info("✅ Đã load: cogs.recap")
 

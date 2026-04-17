@@ -11,6 +11,7 @@ from utils.constants import MAX_MESSAGES
 from services.message_fetcher import fetch_messages_in_range, format_messages_for_ai
 from services.summarizer import summarize
 from services.formatter import build_recap_embed, build_error_embed, build_warning_embed
+from services import context_db
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +51,7 @@ class RecapCog(commands.Cog):
 
         # --- Kiểm tra channel hợp lệ ---
         if not isinstance(channel, discord.TextChannel):
-            await interaction.followup.send(
+            await interaction.edit_original_response(
                 embed=build_error_embed(
                     "Kênh không hợp lệ",
                     "Lệnh `/recap` chỉ hoạt động trong **Text Channel**.",
@@ -61,7 +62,7 @@ class RecapCog(commands.Cog):
         # --- Parse thời gian ---
         start_utc, end_utc = build_datetime_range(start, end, date)
         if start_utc is None or end_utc is None:
-            await interaction.followup.send(
+            await interaction.edit_original_response(
                 embed=build_error_embed(
                     "Thời gian không hợp lệ",
                     f"Không thể hiểu định dạng thời gian:\n"
@@ -113,18 +114,18 @@ class RecapCog(commands.Cog):
         # Ưu tiên kênh được chọn
         channel = target_channel or interaction.channel
         if not isinstance(channel, discord.TextChannel):
-            await interaction.followup.send(embed=build_error_embed("Lỗi", "Chỉ dùng lệnh này được trong kênh chat văn bản."))
+            await interaction.edit_original_response(embed=build_error_embed("Lỗi", "Chỉ dùng lệnh này được trong kênh chat văn bản."))
             return
 
         # Gọi logic fetch và recap (tận dụng code đã có)
         await self._do_recap_process(interaction, channel, start_utc, end_utc, user)
 
     async def _do_recap_process(
-        self, 
-        interaction: discord.Interaction, 
-        channel: discord.TextChannel, 
-        start_utc: datetime, 
-        end_utc: datetime, 
+        self,
+        interaction: discord.Interaction,
+        channel: discord.TextChannel,
+        start_utc,
+        end_utc,
         user: Optional[discord.Member]
     ):
         """Hàm helper chứa logic chính của việc recap để dùng chung cho nhiều lệnh."""
@@ -136,19 +137,25 @@ class RecapCog(commands.Cog):
                 target_user=user,
                 max_messages=MAX_MESSAGES,
             )
-            
+
             if not messages:
                 user_text = f" của **{user.display_name}**" if user else ""
-                await interaction.followup.send(
-                    embed=build_warning_embed(
-                        "Không có tin nhắn",
-                        f"Không tìm thấy tin nhắn{user_text} nào từ đầu ngày đến giờ."
+                try:
+                    await interaction.edit_original_response(
+                        embed=build_warning_embed(
+                            "Không có tin nhắn",
+                            f"Không tìm thấy tin nhắn{user_text} nào từ đầu ngày đến giờ."
+                        )
                     )
-                )
+                except discord.NotFound:
+                    logger.warning("[RECAP] Interaction không còn tồn tại khi gửi thông báo 'Không có tin nhắn'.")
                 return
 
+            # Load context của người dùng từ DB
+            user_context = await context_db.get_context(interaction.user.id)
+
             conversation_text = format_messages_for_ai(messages)
-            summary = await summarize(conversation_text)
+            summary = await summarize(conversation_text, context=user_context)
 
             embeds = build_recap_embed(
                 summary=summary,
@@ -159,22 +166,108 @@ class RecapCog(commands.Cog):
                 target_user=user,
             )
 
-            await interaction.followup.send(embed=embeds[0])
+            try:
+                await interaction.edit_original_response(embed=embeds[0])
+            except discord.NotFound:
+                # Nếu interaction bị xóa, gửi trực tiếp vào channel như phương án dự phòng
+                await channel.send(content=f"{interaction.user.mention} Kết quả recap của bạn:", embed=embeds[0])
+            
             for extra_embed in embeds[1:]:
                 await channel.send(embed=extra_embed)
 
         except discord.Forbidden:
             logger.error(f"[RECAP] Thiếu quyền truy cập trong #{channel.name}")
-            await interaction.followup.send(
-                embed=build_error_embed(
-                    "Thiếu quyền truy cập",
-                    f"Bot không có quyền xem hoặc đọc lịch sử tin nhắn trong kênh {channel.mention}.\n"
-                    "Vui lòng kiểm tra lại quyền **View Channel** và **Read Message History**."
+            try:
+                await interaction.edit_original_response(
+                    embed=build_error_embed(
+                        "Thiếu quyền truy cập",
+                        f"Bot không có quyền xem hoặc đọc lịch sử tin nhắn trong kênh {channel.mention}.\n"
+                        "Vui lòng kiểm tra lại quyền **View Channel** và **Read Message History**."
+                    )
                 )
-            )
+            except discord.NotFound:
+                logger.warning("[RECAP] Interaction không còn tồn tại khi gửi thông báo 'Thiếu quyền'.")
         except Exception as e:
             logger.error(f"[RECAP] Lỗi hệ thống: {e}")
-            await interaction.followup.send(embed=build_error_embed("Lỗi hệ thống", f"Đã xảy ra lỗi: `{str(e)}`"))
+            try:
+                await interaction.edit_original_response(
+                    embed=build_error_embed("Lỗi hệ thống", f"Đã xảy ra lỗi: `{str(e)}`")
+                )
+            except discord.NotFound:
+                logger.warning(f"[RECAP] Interaction không còn tồn tại khi gửi báo lỗi: {e}")
+
+
+    @app_commands.command(
+        name="set_context",
+        description="🧠 Thiết lập ngữ cảnh bổ sung cho AI khi tóm tắt (lưu theo tài khoản Discord)",
+    )
+    @app_commands.describe(
+        context="Nội dung ngữ cảnh (VD: đây là kênh nghiệp vụ của team kỹ thuật)",
+    )
+    async def set_context(
+        self,
+        interaction: discord.Interaction,
+        context: str,
+    ):
+        """Lưu ngữ cảnh bổ sung vào DB theo Discord ID của người dùng."""
+        await context_db.set_context(
+            discord_id=interaction.user.id,
+            username=str(interaction.user),
+            context=context,
+        )
+        logger.info(f"[CONTEXT] Set bởi {interaction.user} ({interaction.user.id}): {context!r}")
+        embed = discord.Embed(
+            title="✅ Đã lưu ngữ cảnh",
+            description=f"**Ngữ cảnh của bạn:**\n```\n{context}\n```\n\nAI sẽ dùng ngữ cảnh này khi bạn gọi `/recap`.",
+            color=discord.Color.green(),
+        )
+        embed.set_footer(text=f"Lưu cho: {interaction.user.display_name} | ID: {interaction.user.id}")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @app_commands.command(
+        name="clear_context",
+        description="🗑️ Xóa ngữ cảnh của bạn khỏi hệ thống",
+    )
+    async def clear_context(self, interaction: discord.Interaction):
+        """Xóa context của user hiện tại trong DB."""
+        cleared = await context_db.clear_context(interaction.user.id)
+        logger.info(f"[CONTEXT] Xóa bởi {interaction.user} ({interaction.user.id})")
+        if cleared:
+            embed = discord.Embed(
+                title="🗑️ Đã xóa ngữ cảnh",
+                description="Ngữ cảnh của bạn đã được xóa.\nAI sẽ tóm tắt theo chế độ mặc định.",
+                color=discord.Color.orange(),
+            )
+        else:
+            embed = discord.Embed(
+                title="ℹ️ Không có ngữ cảnh",
+                description="Bạn chưa thiết lập ngữ cảnh nào. Dùng `/set_context` để thêm.",
+                color=discord.Color.light_grey(),
+            )
+        embed.set_footer(text=f"User: {interaction.user.display_name}")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @app_commands.command(
+        name="show_context",
+        description="👁️ Xem ngữ cảnh hiện tại của bạn đang được dùng cho AI",
+    )
+    async def show_context(self, interaction: discord.Interaction):
+        """Hiển thị context hiện tại từ DB của user."""
+        ctx = await context_db.get_context(interaction.user.id)
+        if ctx:
+            embed = discord.Embed(
+                title="🧠 Ngữ cảnh của bạn",
+                description=f"```\n{ctx}\n```",
+                color=discord.Color.blurple(),
+            )
+        else:
+            embed = discord.Embed(
+                title="🧠 Ngữ cảnh của bạn",
+                description="*(Chưa có ngữ cảnh nào)* — Dùng `/set_context` để thiết lập.",
+                color=discord.Color.light_grey(),
+            )
+        embed.set_footer(text=f"User: {interaction.user.display_name} | ID: {interaction.user.id}")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 async def setup(bot: commands.Bot):

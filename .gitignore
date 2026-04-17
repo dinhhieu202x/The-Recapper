@@ -15,3 +15,7 @@ Dockerfile
 *.png
 *.log
 check_models.py
+
+# Database
+data/
+*.db

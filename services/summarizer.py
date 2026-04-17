@@ -23,7 +23,7 @@ CHUNK_SUMMARY_PROMPT = """Đây là một phần của cuộc hội thoại. Hã
 MERGE_PROMPT = """Dưới đây là các bản tóm tắt từng phần của một cuộc hội thoại. Hãy tổng hợp thành một bản tóm tắt hoàn chỉnh, mạch lạc bằng tiếng Việt, dùng bullet points và nêu rõ các chủ đề chính, quyết định và action items nếu có:"""
 
 
-async def summarize(conversation_text: str) -> str:
+async def summarize(conversation_text: str, context: str = "") -> str:
     """
     Gửi nội dung chat tới Gemini để tóm tắt.
     Nếu nội dung quá dài → chia chunk → tóm tắt từng chunk → merge.
@@ -31,9 +31,13 @@ async def summarize(conversation_text: str) -> str:
     if not _api_key:
         return "⚠️ Chưa cấu hình GEMINI_API_KEY. Vui lòng thêm vào file .env"
 
+    dynamic_system_prompt = SYSTEM_PROMPT
+    if context:
+        dynamic_system_prompt += f"\n\n**Ngữ cảnh bổ sung của cuộc hội thoại:**\n{context}"
+
     model = genai.GenerativeModel(
         model_name="models/gemini-flash-latest",
-        system_instruction=SYSTEM_PROMPT,
+        system_instruction=dynamic_system_prompt,
     )
 
     # Nội dung ngắn → tóm tắt trực tiếp
